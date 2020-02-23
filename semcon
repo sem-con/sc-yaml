@@ -1,0 +1,237 @@
+#!/bin/bash
+
+# resources
+# - https://sap1ens.com/blog/2017/07/01/bash-scripting-best-practices/
+
+set -o errexit
+set -o pipefail
+
+# helper functions ================
+
+version_info()
+{
+    echo "semcon, version 0.1"
+    echo ""
+}
+
+usage_info()
+{
+    echo "Usage: $0"
+    echo -e "\t--help               print this help message"
+    echo -e "\t--version            version information"
+    echo -e "\t-v|--verbose         print additional information"
+    echo ""
+    echo -e "\tstart <file.yaml>    start a Semantic Container with configuration in"
+    echo -e "\t                     file.yaml"
+    echo -e "\tset <container> <config.yaml>"
+    echo -e "\t                     define a container as specified in <config.yaml>"
+    echo -e "\t<container> perm create <account> <scope>"
+    echo -e "\t                     create account with given scope"
+    echo -e "\t<container> perm show <account>"
+    echo -e "\t                     show account information"
+    echo -e "\t<container> perm setenv <account> <name>"
+    echo -e "\t                     set environment variable"
+    echo -e "\t<container> write [<account|token>]"
+    echo -e "\t                     read data from <stdin> and write as account"
+    echo -e "\t<container> read [<account|token>]"
+    echo -e "\t                     read data from <container> and write to <stdout>"
+    echo ""
+}
+
+extract_yaml()
+{
+    eval "$3=$(grep "$2" $1 | head -n1 | cut -d ':' -f 2,3 | tr -d "[:space:]")"
+}
+
+invalid_syntax()
+{
+    echo "invalid option or syntax: ${args}"
+    usage_info
+    if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
+        return 1
+    else
+        exit 1
+    fi
+}
+
+# read from & write into container =================
+get_port()
+{
+    eval "$2=$(docker port hse | cut -d ":" -f 2)"
+}
+
+write_data()
+{
+    if $VERBOSE ; then
+        echo "writing data into container"
+    fi
+
+    return_value=''; 
+    get_port $1 return_value
+    SC_PORT=$return_value
+    command="cat - | curl -X POST -d @- -H 'Content-Type: application/json' http://localhost:${SC_PORT}/api/data"
+    if $VERBOSE ; then
+        echo "${command}"
+    fi
+
+    eval $command
+}
+
+read_data()
+{
+    if $VERBOSE ; then
+        echo "reading data from container"
+    fi
+
+    return_value=''; 
+    get_port $1 return_value
+    SC_PORT=$return_value
+    command="curl http://localhost:${SC_PORT}/api/data"
+    if $VERBOSE ; then
+        echo "${command}"
+    fi
+
+    eval $command
+}
+
+# start container =================
+start_container()
+{
+    if $VERBOSE ; then
+        echo "starting container"
+    fi
+
+    return_value=''; 
+    extract_yaml "./${SC_CONFIG_FILE}" "image" return_value
+    IMAGE=$return_value
+
+    return_value=''; 
+    extract_yaml "./${SC_CONFIG_FILE}" "port" return_value
+    PORT=$return_value
+
+    return_value=''; 
+    extract_yaml "./${SC_CONFIG_FILE}" "name" return_value
+    CONTAINER_NAME=$return_value
+
+    CONFIG_PATH=$(dirname "$PWD/${SC_CONFIG_FILE}")
+    CONFIG_FILE=$(basename "./${SC_CONFIG_FILE}")
+
+    command="docker rm -f ${CONTAINER_NAME};"
+    command="${command} docker run -d"
+    command="${command} --name ${CONTAINER_NAME}"
+    command="${command} -p ${PORT}:3000"
+    command="${command} -v ${CONFIG_PATH}:/config"
+    command="${command} -e CONFIG_FILE=${CONFIG_FILE}"
+    command="${command} -e IMAGE_SHA256=\"\$(docker image ls --no-trunc -q ${IMAGE} | cut -c8-)\""
+    command="${command} -e IMAGE_NAME=${IMAGE}"
+    command="${command} ${IMAGE}"
+
+    if $VERBOSE ; then
+        echo "${command}"
+    fi
+    eval $command
+}
+
+# option handling =================
+args=("$@") 
+VERBOSE=false
+if [[ $# -eq 0 ]]
+then
+    usage_info
+    exit 0
+fi 
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --version) 
+            version_info
+            exit 0
+            ;;
+        --help)
+            version_info
+            usage_info
+            exit 0
+            ;;
+        --verbose|-v)
+            VERBOSE=true
+            ;;
+        start)
+            SC_MODE=start
+            shift
+            if [[ $# -eq 1 ]] 
+            then
+                SC_CONFIG_FILE=$1
+                start_container
+                exit 0
+            else
+                invalid_syntax
+            fi
+            ;;
+        *)
+            SC_CONTAINER_NAME=$1
+            if [ "$(docker ps -q -f name=${SC_CONTAINER_NAME})" ]; 
+            then
+                shift
+                case "$1" in
+                    perm)
+                        SC_MODE=perm
+                        shift
+                        case "$1" in
+                            show)
+                                shift
+                                if [[ $# -eq 1 ]] 
+                                then
+                                    SC_ACCOUNT=$1
+                                    show_perm
+                                    exit 0
+                                else
+                                    invalid_syntax
+                                fi
+                                ;;
+                            create)
+                                shift
+                                if [[ $# -eq 2 ]] 
+                                then
+                                    SC_ACCOUNT=$1
+                                    SC_ACCOUNT_SCOPE=$2
+                                    create_perm
+                                    exit 0
+                                else
+                                    invalid_syntax
+                                fi
+                                ;;
+                            setenv)
+                                shift
+                                if [[ $# -eq 2 ]] 
+                                then
+                                    SC_ACCOUNT=$1
+                                    SC_ENV=$2
+                                    set_permenv
+                                    exit 0
+                                else
+                                    invalid_syntax
+                                fi
+                                ;;
+                            *)
+                                invalid_syntax
+                                ;;
+                        esac
+                        ;;
+                    write)
+                        SC_MODE=write
+                        write_data $SC_CONTAINER_NAME
+                        ;;
+                    read)
+                        SC_MODE=read
+                        read_data $SC_CONTAINER_NAME
+                        ;;
+                    *)
+                        invalid_syntax
+                        ;;
+                esac
+            else
+                invalid_syntax
+            fi
+            ;;
+    esac
+    shift
+done
