@@ -24,19 +24,11 @@ module ApplicationHelper
     end
 
     def container_usage_policy
-        if Semantic.count > 0
-            init = RDF::Repository.new()
-            init << RDF::Reader.for(:trig).new(Semantic.first.validation.to_s)
-            uc = nil
-            init.each_graph{ |g| g.graph_name == SEMCON_ONTOLOGY + "UsagePolicy" ? uc = g : nil }
-            if uc.nil?
-                nil
-            else
-                uc.dump(:trig).to_s
-            end
-        else 
-            nil
+        @up = Overlay.find_by_name("usage_policy")
+        if @up.nil?
+            return nil
         end
+        return @up.body
     end
 
     def data_constraints
