@@ -21,7 +21,7 @@ gem 'rdf-trig'
 gem 'delayed_job_active_record'
 
 # update for security fixes
-gem 'loofah', '~> 2.3', '>= 2.3.1'
+gem 'loofah', '~> 2.19'
 
 
 group :development, :test do
